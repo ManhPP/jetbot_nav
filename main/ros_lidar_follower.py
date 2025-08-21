@@ -84,6 +84,47 @@ class JetBotCorrectedController:
             rospy.logerr(f"Không thể tải mô hình YOLO từ '{self.YOLO_MODEL_PATH}'. Lỗi: {e}")
             self.yolo_session = None
 
+    def numpy_nms(self, boxes, scores, iou_threshold):
+        """
+        Thực hiện Non-Maximum Suppression (NMS) bằng NumPy.
+        :param boxes: list các bounding box, mỗi box là [x1, y1, x2, y2]
+        :param scores: list các điểm tin cậy tương ứng
+        :param iou_threshold: ngưỡng IoU để loại bỏ các box trùng lặp
+        :return: list các chỉ số (indices) của các box được giữ lại
+        """
+        # Chuyển đổi sang NumPy array để tính toán vector hóa
+        x1 = np.array([b[0] for b in boxes])
+        y1 = np.array([b[1] for b in boxes])
+        x2 = np.array([b[2] for b in boxes])
+        y2 = np.array([b[3] for b in boxes])
+
+        areas = (x2 - x1 + 1) * (y2 - y1 + 1)
+        # Sắp xếp các box theo điểm tin cậy giảm dần
+        order = scores.argsort()[::-1]
+
+        keep = []
+        while order.size > 0:
+            i = order[0]
+            keep.append(i)
+            
+            # Tính toán IoU (Intersection over Union)
+            xx1 = np.maximum(x1[i], x1[order[1:]])
+            yy1 = np.maximum(y1[i], y1[order[1:]])
+            xx2 = np.minimum(x2[i], x2[order[1:]])
+            yy2 = np.minimum(y2[i], y2[order[1:]])
+
+            w = np.maximum(0.0, xx2 - xx1 + 1)
+            h = np.maximum(0.0, yy2 - yy1 + 1)
+            intersection = w * h
+            
+            iou = intersection / (areas[i] + areas[order[1:]] - intersection)
+
+            # Giữ lại các box có IoU nhỏ hơn ngưỡng
+            inds = np.where(iou <= iou_threshold)[0]
+            order = order[inds + 1]
+
+        return np.array(keep)
+
     def detect_with_yolo(self, image):
         """
         Thực hiện nhận diện đối tượng bằng YOLOv8 và hậu xử lý kết quả đúng cách.
@@ -137,7 +178,7 @@ class JetBotCorrectedController:
         # Đây là một bước cực kỳ quan trọng để loại bỏ các box trùng lặp
         # OpenCV cung cấp một hàm NMS hiệu quả
         nms_threshold = 0.45 # Ngưỡng IOU để loại bỏ box
-        indices = cv2.dnn.NMSBoxes(boxes, scores, self.YOLO_CONF_THRESHOLD, nms_threshold)
+        indices = self.numpy_nms(np.array(boxes), scores, nms_threshold)
         
         if len(indices) == 0:
             rospy.loginfo("YOLO: Sau NMS, không còn đối tượng nào.")
