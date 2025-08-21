@@ -10,7 +10,7 @@ import math
 from enum import Enum
 
 from jetbot import Robot
-# import onnxruntime as ort
+import onnxruntime as ort
 from pyzbar.pyzbar import decode
 import paho.mqtt.client as mqtt
 from sensor_msgs.msg import LaserScan, Image
@@ -30,7 +30,7 @@ class JetBotCorrectedController:
         rospy.loginfo("Đang khởi tạo JetBot Corrected Event-Driven Controller...")
         self.setup_parameters()
         self.initialize_hardware()
-        # self.initialize_yolo()
+        self.initialize_yolo()
         self.initialize_mqtt()
         self.latest_scan = None
         self.latest_image = None
@@ -55,15 +55,15 @@ class JetBotCorrectedController:
         self.LINE_COLOR_UPPER = np.array([125, 255, 255])
         self.INTERSECTION_CLEARANCE_DURATION = 1.5
         self.SCAN_PIXEL_THRESHOLD = 100
-        self.YOLO_MODEL_PATH = "yolo_model.onnx"
+        self.YOLO_MODEL_PATH = "models/best.onnx"
         self.YOLO_CONF_THRESHOLD = 0.6
         self.YOLO_INPUT_SIZE = (640, 640)
-        self.YOLO_CLASS_NAMES = ['turn_left', 'turn_right', 'go_straight', 'qr_code', 'math_problem']
+        self.YOLO_CLASS_NAMES = ['F', 'L', 'NF', 'NL', 'NR', 'R', 'math']
         self.MQTT_BROKER = "localhost"; self.MQTT_PORT = 1883
         self.MQTT_DATA_TOPIC = "jetbot/corrected_event_data"
         self.current_state = None
         self.DIRECTIONS = [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]
-        self.current_direction_index = 0
+        self.current_direction_index = 1
         self.ANGLE_TO_FACE_SIGN_MAP = {d: a for d, a in zip(self.DIRECTIONS, [45, -45, -135, 135])}
 
     def initialize_hardware(self):
@@ -76,7 +76,84 @@ class JetBotCorrectedController:
             self.robot = Mock()
 
     def initialize_yolo(self):
-        self.yolo_session = None
+        """Tải mô hình YOLO vào ONNX Runtime."""
+        try:
+            self.yolo_session = ort.InferenceSession(self.YOLO_MODEL_PATH, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+            rospy.loginfo("Tải mô hình YOLO thành công.")
+        except Exception as e:
+            rospy.logerr(f"Không thể tải mô hình YOLO từ '{self.YOLO_MODEL_PATH}'. Lỗi: {e}")
+            self.yolo_session = None
+
+    def detect_with_yolo(self, image):
+        """
+        Thực hiện nhận diện đối tượng bằng YOLOv8 và hậu xử lý kết quả đúng cách.
+        """
+        if self.yolo_session is None: return []
+
+        original_height, original_width = image.shape[:2]
+
+        img_resized = cv2.resize(image, self.YOLO_INPUT_SIZE)
+        img_data = np.array(img_resized, dtype=np.float32) / 255.0
+        img_data = np.transpose(img_data, (2, 0, 1))  # HWC to CHW
+        input_tensor = np.expand_dims(img_data, axis=0)  # Add batch dimension
+
+        input_name = self.yolo_session.get_inputs()[0].name
+        outputs = self.yolo_session.run(None, {input_name: input_tensor})
+
+        # Lấy output thô, output của YOLOv8 thường có shape (1, 84, 8400) hoặc tương tự
+        # Chúng ta cần transpose nó thành (1, 8400, 84) để dễ xử lý
+        predictions = np.squeeze(outputs[0]).T
+
+        # Lọc các box có điểm tin cậy (objectness score) thấp
+        # Cột 4 trong predictions là điểm tin cậy tổng thể của box
+        scores = np.max(predictions[:, 4:], axis=1)
+        predictions = predictions[scores > self.YOLO_CONF_THRESHOLD, :]
+        scores = scores[scores > self.YOLO_CONF_THRESHOLD]
+
+        if predictions.shape[0] == 0:
+            rospy.loginfo("YOLO không phát hiện đối tượng nào vượt ngưỡng tin cậy.")
+            return []
+
+        # Lấy class_id có điểm cao nhất
+        class_ids = np.argmax(predictions[:, 4:], axis=1)
+
+        # Lấy tọa độ box và chuyển đổi về ảnh gốc
+        x, y, w, h = predictions[:, 0], predictions[:, 1], predictions[:, 2], predictions[:, 3]
+        
+        # Tính toán tỷ lệ scale để chuyển đổi tọa độ
+        x_scale = original_width / self.YOLO_INPUT_SIZE[0]
+        y_scale = original_height / self.YOLO_INPUT_SIZE[1]
+
+        # Chuyển từ [center_x, center_y, width, height] sang [x1, y1, x2, y2]
+        x1 = (x - w / 2) * x_scale
+        y1 = (y - h / 2) * y_scale
+        x2 = (x + w / 2) * x_scale
+        y2 = (y + h / 2) * y_scale
+        
+        # Chuyển thành list các box và scores
+        boxes = np.column_stack((x1, y1, x2, y2)).tolist()
+        
+        # 4. Thực hiện Non-Maximum Suppression (NMS)
+        # Đây là một bước cực kỳ quan trọng để loại bỏ các box trùng lặp
+        # OpenCV cung cấp một hàm NMS hiệu quả
+        nms_threshold = 0.45 # Ngưỡng IOU để loại bỏ box
+        indices = cv2.dnn.NMSBoxes(boxes, scores, self.YOLO_CONF_THRESHOLD, nms_threshold)
+        
+        if len(indices) == 0:
+            rospy.loginfo("YOLO: Sau NMS, không còn đối tượng nào.")
+            return []
+
+        # 5. Tạo danh sách kết quả cuối cùng
+        final_detections = []
+        for i in indices.flatten():
+            final_detections.append({
+                'class_name': self.YOLO_CLASS_NAMES[class_ids[i]],
+                'confidence': float(scores[i]),
+                'box': [int(coord) for coord in boxes[i]] # Chuyển tọa độ sang int
+            })
+
+        rospy.loginfo(f"YOLO đã phát hiện {len(final_detections)} đối tượng cuối cùng.")
+        return final_detections
 
     def initialize_mqtt(self):
         self.mqtt_client = mqtt.Client()
@@ -180,6 +257,43 @@ class JetBotCorrectedController:
         rospy.loginfo("\n[GIAO LỘ] Dừng lại và xử lý...")
         self.robot.stop(); time.sleep(0.5)
         nav_action = None
+
+        current_direction = self.DIRECTIONS[self.current_direction_index]
+        angle_to_sign = self.ANGLE_TO_FACE_SIGN_MAP.get(current_direction, 0)
+        self.turn_robot(angle_to_sign, False)
+
+        image_info = self.latest_image
+        detections = self.detect_with_yolo(image_info)
+
+        for det in detections:
+            if det['class_name'] in ['F', 'L', 'R']:
+                rospy.loginfo(f"[QUYẾT ĐỊNH] Theo biển báo: {det['class_name'].upper()}")
+                if det['class_name'] == 'L': nav_action = -90
+                elif det['class_name'] == 'R': nav_action = 90
+                else: nav_action = 0
+                break
+        if nav_action is None:
+            for det in detections:
+                if det['class_name'] == 'qr':
+                    box = det['box']
+                    qr_image = image_info[box[1]:box[3], box[0]:box[2]]
+                    decoded = decode(qr_image)
+                    if decoded:
+                        qr_data = decoded[0].data.decode('utf-8')
+                        self.publish_data({'type': 'QR_CODE', 'value': qr_data})
+                    break
+        if nav_action is None:
+             for det in detections:
+                if det['class_name'] == 'math':
+                    # TODO: Cần tích hợp OCR ở đây
+                    problem_text = "25 + 17" 
+                    solution = self.solve_math_problem(problem_text)
+                    if solution is not None:
+                        self.publish_data({'type': 'MATH_PROBLEM', 'problem': problem_text, 'solution': solution})
+                    break
+
+        self.turn_robot(-angle_to_sign, False)
+
         if nav_action is not None:
             self.turn_robot(nav_action, update_main_direction=True)
         else:
