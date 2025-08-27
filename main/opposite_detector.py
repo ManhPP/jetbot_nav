@@ -80,7 +80,7 @@ class SimpleOppositeDetector:
         self.latest_scan = scan
         current_time = time.time()
         if current_time - self.last_detection_time >= self.detection_interval:
-            self.process_detection()
+            # self.process_detection()
             self.last_detection_time = current_time
     
     def index_to_angle(self, index, scan):
