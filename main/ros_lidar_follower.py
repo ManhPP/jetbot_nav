@@ -38,6 +38,7 @@ class JetBotController:
 
         self.navigator = MapNavigator(self.MAP_FILE_PATH)
         self.current_node_id = self.navigator.start_node
+        self.target_node_id = None
         self.planned_path = None
         self.banned_edges = []
         self.plan_initial_route()
@@ -60,10 +61,11 @@ class JetBotController:
             self.navigator.end_node,
             self.banned_edges
         )
-        if self.planned_path:
-            rospy.loginfo(f"Đã tìm thấy đường đi: {self.planned_path}")
+        if self.planned_path and len(self.planned_path) > 1:
+            self.target_node_id = self.planned_path[1]
+            rospy.loginfo(f"Đã tìm thấy đường đi: {self.planned_path}. Đích đến đầu tiên: {self.target_node_id}")
         else:
-            rospy.logerr("Không tìm thấy đường đi đến đích!")
+            rospy.logerr("Không tìm thấy đường đi hoặc đường đi quá ngắn!")
             self._set_state(RobotState.DEAD_END)
 
     def setup_parameters(self):
@@ -281,6 +283,9 @@ class JetBotController:
                     if line_lost:
                         rospy.logwarn("SỰ KIỆN: Vạch kẻ đường biến mất (ngã ba/ngã tư).")
 
+                    self.current_node_id = self.target_node_id
+                    rospy.loginfo(f"==> ĐÃ ĐẾN node {self.current_node_id}.")
+
                     # Kiểm tra xem đã đến đích chưa
                     if self.current_node_id == self.navigator.end_node:
                         rospy.loginfo("ĐÃ ĐẾN ĐÍCH!")
@@ -464,24 +469,40 @@ class JetBotController:
             break 
 
         # 4. Thực thi quyết định
-        if final_decision == 'straight': rospy.loginfo("[FINAL] Decision: Go STRAIGHT.")
-        elif final_decision == 'right': rospy.loginfo("[FINAL] Decision: Turn RIGHT."); self.turn_robot(90, True)
-        elif final_decision == 'left': rospy.loginfo("[FINAL] Decision: Turn LEFT."); self.turn_robot(-90, True)
+        if final_decision == 'straight': 
+            rospy.loginfo("[FINAL] Decision: Go STRAIGHT.")
+        elif final_decision == 'right': 
+            rospy.loginfo("[FINAL] Decision: Turn RIGHT.") 
+            self.turn_robot(90, True)
+        elif final_decision == 'left': 
+            rospy.loginfo("[FINAL] Decision: Turn LEFT.") 
+            self.turn_robot(-90, True)
         else:
-            rospy.logwarn("[!!!] DEAD END! No valid paths found."); self._set_state(RobotState.DEAD_END); return
+            rospy.logwarn("[!!!] DEAD END! No valid paths found.") 
+            self._set_state(RobotState.DEAD_END)
+            return
         
         # 5. Cập nhật trạng thái robot sau khi thực hiện
         # 5.1. Xác định node tiếp theo
         next_node_id = None
         if not is_deviation:
             # Nếu đi theo kế hoạch, chỉ cần lấy node tiếp theo từ path
-            path_index = self.planned_path.index(self.current_node_id)
-            next_node_id = self.planned_path[path_index + 1]
+            next_node_id = self.planned_path[self.planned_path.index(self.current_node_id) + 1]
         else:
             # Nếu chệch hướng, phải tìm node tiếp theo dựa trên hành động đã thực hiện
             
             new_robot_direction = self.DIRECTIONS[self.current_direction_index] 
-            executed_direction_label = self.map_relative_to_absolute(final_decision, new_robot_direction)
+            
+            executed_direction_label = None
+            for label, direction_enum in self.LABEL_TO_DIRECTION_ENUM.items():
+                if direction_enum == new_robot_direction:
+                    executed_direction_label = label 
+                    break
+            
+            if executed_direction_label is None:
+                rospy.logerr("Lỗi logic: Không thể tìm thấy label cho hướng đi mới của robot."); self._set_state(RobotState.DEAD_END) 
+                return
+
             next_node_id = self.navigator.get_neighbor_by_direction(self.current_node_id, executed_direction_label)
             if next_node_id is None:
                  rospy.logerr("LỖI BẢN ĐỒ! Đã thực hiện rẽ nhưng không có node tương ứng."); self._set_state(RobotState.DEAD_END); return
@@ -495,15 +516,18 @@ class JetBotController:
             else:
                 rospy.logerr("Không thể tìm đường về đích từ vị trí mới."); self._set_state(RobotState.DEAD_END); return
 
-        self.current_node_id = next_node_id
-        rospy.loginfo(f"==> Đang di chuyển đến node tiếp theo: {self.current_node_id}")
+        self.target_node_id = next_node_id
+        rospy.loginfo(f"==> Đang di chuyển đến node tiếp theo: {self.target_node_id}")
         self._set_state(RobotState.LEAVING_INTERSECTION)
     
     def turn_robot(self, degrees, update_main_direction=True):
         duration = abs(degrees) / 90.0 * self.TURN_DURATION_90_DEG
-        if degrees > 0: self.robot.set_motors(self.TURN_SPEED, -self.TURN_SPEED)
-        elif degrees < 0: self.robot.set_motors(-self.TURN_SPEED, self.TURN_SPEED)
-        if degrees != 0: time.sleep(duration)
+        if degrees > 0: 
+            self.robot.set_motors(self.TURN_SPEED, -self.TURN_SPEED)
+        elif degrees < 0: 
+            self.robot.set_motors(-self.TURN_SPEED, self.TURN_SPEED)
+        if degrees != 0: 
+            time.sleep(duration)
         self.robot.stop()
         if update_main_direction and degrees % 90 == 0 and degrees != 0:
             num_turns = round(degrees / 90)

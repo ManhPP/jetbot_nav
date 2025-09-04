@@ -1,4 +1,5 @@
 # map_navigator.py
+import rospy
 
 import json
 import networkx as nx
@@ -64,6 +65,7 @@ class MapNavigator:
                 end_node_id, 
                 heuristic=self._heuristic
             )
+            rospy.loginfo(f"Path found: {path}")
             return path
         except nx.NetworkXNoPath:
             return None
@@ -81,6 +83,7 @@ class MapNavigator:
 
         next_node_id = path[current_index + 1]
         edge_data = self.graph.get_edge_data(current_node_id, next_node_id)
+        rospy.loginfo(f"Next direction from {current_node_id} to {next_node_id}: {edge_data.get('label', None)}")
         return edge_data.get('label', None)
     
     def get_neighbor_by_direction(self, current_node_id, direction_label):
@@ -93,5 +96,6 @@ class MapNavigator:
         for neighbor in self.graph.neighbors(current_node_id):
             edge_data = self.graph.get_edge_data(current_node_id, neighbor)
             if edge_data and edge_data.get('label') == direction_label:
+                rospy.loginfo(f"Neighbor of {current_node_id} in direction {direction_label}: {neighbor}")
                 return neighbor
         return None
