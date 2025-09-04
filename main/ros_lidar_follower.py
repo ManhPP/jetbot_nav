@@ -20,10 +20,12 @@ from map_navigator import MapNavigator
 
 class RobotState(Enum):
     DRIVING_STRAIGHT = 1
-    HANDLING_EVENT = 2
-    LEAVING_INTERSECTION = 3
-    DEAD_END = 4
-    GOAL_REACHED = 5
+    APPROACHING_INTERSECTION = 2
+    HANDLING_EVENT = 3
+    LEAVING_INTERSECTION = 4
+    REACQUIRING_LINE = 5
+    DEAD_END = 6
+    GOAL_REACHED = 7
 
 class Direction(Enum):
     NORTH, EAST, SOUTH, WEST = 0, 1, 2, 3
@@ -75,11 +77,17 @@ class JetBotController:
         self.TURN_DURATION_90_DEG = 0.8
         self.ROI_Y = int(self.HEIGHT * 0.85)
         self.ROI_H = int(self.HEIGHT * 0.15)
+
+        self.LOOKAHEAD_ROI_Y = int(self.HEIGHT * 0.60) # Vị trí Y cao hơn
+        self.LOOKAHEAD_ROI_H = int(self.HEIGHT * 0.15) # Chiều cao tương tự
+
         self.CORRECTION_GAIN = 0.5
-        self.SAFE_ZONE_PERCENT = 0.40
+        self.SAFE_ZONE_PERCENT = 0.4
         self.LINE_COLOR_LOWER = np.array([95, 80, 50])
         self.LINE_COLOR_UPPER = np.array([125, 255, 255])
         self.INTERSECTION_CLEARANCE_DURATION = 1.5
+        self.INTERSECTION_APPROACH_DURATION = 0.5
+        self.LINE_REACQUIRE_TIMEOUT = 3.0
         self.SCAN_PIXEL_THRESHOLD = 100
         self.YOLO_MODEL_PATH = "models/best.onnx"
         self.YOLO_CONF_THRESHOLD = 0.6
@@ -94,8 +102,7 @@ class JetBotController:
         self.DIRECTIONS = [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]
         self.current_direction_index = 1
         self.ANGLE_TO_FACE_SIGN_MAP = {d: a for d, a in zip(self.DIRECTIONS, [45, -45, -135, 135])}
-
-        self.MAX_ACCEPTABLE_ERROR_PERCENT = 0.85 
+        self.MAX_CORRECTION_ADJ = 0.12
         self.MAP_FILE_PATH = "map.json"
         self.LABEL_TO_DIRECTION_ENUM = {'N': Direction.NORTH, 'E': Direction.EAST, 'S': Direction.SOUTH, 'W': Direction.WEST}
 
@@ -260,54 +267,111 @@ class JetBotController:
         self.detector.start_scanning()
         rate = rospy.Rate(20)
         while not rospy.is_shutdown():
+            # ===================================================================
+            # TRẠNG THÁI 1: ĐANG BÁM LINE (DRIVING_STRAIGHT)
+            # ===================================================================
             if self.current_state == RobotState.DRIVING_STRAIGHT:
                 if self.latest_image is None:
                     rospy.logwarn_throttle(5, "Đang chờ dữ liệu hình ảnh từ topic camera...")
+                    self.robot.stop()
                     rate.sleep()
                     continue
 
-                lidar_detected = self.detector.process_detection()
-                line_lost = False
-                line_center_x = self._get_line_center(self.latest_image)
-                if line_center_x is None:
-                    line_lost = True
+                # --- BƯỚC 1: KIỂM TRA TÍN HIỆU ƯU TIÊN CAO (LiDAR) ---
+                # Đây là tín hiệu đáng tin cậy nhất, nếu nó kích hoạt, xử lý ngay.
+                if self.detector.process_detection():
+                    rospy.loginfo("SỰ KIỆN (LiDAR): Phát hiện giao lộ. Dừng ngay lập tức.")
+                    self.robot.stop()
+                    time.sleep(0.5) # Chờ robot dừng hẳn
+
+                    # Cập nhật vị trí hiện tại (đã đến đích) và xử lý
+                    self.current_node_id = self.target_node_id
+                    rospy.loginfo(f"==> ĐÃ ĐẾN node {self.current_node_id}.")
+
+                    if self.current_node_id == self.navigator.end_node:
+                        rospy.loginfo("ĐÃ ĐẾN ĐÍCH CUỐI CÙNG!")
+                        self._set_state(RobotState.GOAL_REACHED)
+                    else:
+                        self._set_state(RobotState.HANDLING_EVENT)
+                        self.handle_intersection()
+                    continue # Bắt đầu vòng lặp mới với trạng thái mới
+
+                # --- BƯỚC 2: LOGIC "NHÌN XA HƠN" VỚI ROI DỰ BÁO ---
+                # Nếu LiDAR im lặng, kiểm tra xem vạch kẻ có sắp biến mất ở phía xa không.
+                lookahead_line_center = self._get_line_center(self.latest_image, self.LOOKAHEAD_ROI_Y, self.LOOKAHEAD_ROI_H)
+
+                if lookahead_line_center is None:
+                    rospy.logwarn("SỰ KIỆN (Dự báo): Vạch kẻ đường biến mất ở phía xa. Chuẩn bị vào giao lộ.")
+                    # Hành động phòng ngừa: chuyển sang trạng thái đi thẳng vào giao lộ.
+                    self._set_state(RobotState.APPROACHING_INTERSECTION)
+                    continue # Bắt đầu vòng lặp mới với trạng thái mới
+
+                # --- BƯỚC 3: BÁM LINE BÌNH THƯỜNG (NẾU PHÍA TRƯỚC AN TOÀN) ---
+                # Chỉ khi cả LiDAR và ROI Dự báo đều ổn, ta mới thực hiện bám line.
+                execution_line_center = self._get_line_center(self.latest_image, self.ROI_Y, self.ROI_H)
+
+                if execution_line_center is not None:
+                    # An toàn để bám line, vì chúng ta biết phía trước không có giao lộ đột ngột.
+                    self.correct_course(execution_line_center)
                 else:
-                    error = line_center_x - (self.WIDTH / 2)
-                    max_error_pixels = (self.WIDTH / 2) * self.MAX_ACCEPTABLE_ERROR_PERCENT
-                    if abs(error) > max_error_pixels:
-                        line_lost = True
+                    # Trường hợp hiếm: ROI xa thấy line nhưng ROI gần lại không. Dừng lại cho an toàn.
+                    rospy.logwarn("Trạng thái không nhất quán: ROI xa thấy line, ROI gần không thấy. Tạm dừng an toàn.")
+                    self.robot.stop()
+
+            # ===================================================================
+            # TRẠNG THÁI 2: ĐANG TIẾN VÀO GIAO LỘ (APPROACHING_INTERSECTION)
+            # ===================================================================
+            elif self.current_state == RobotState.APPROACHING_INTERSECTION:
+                # Đi thẳng một đoạn ngắn để vào trung tâm giao lộ
+                self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
                 
-                if lidar_detected or line_lost:
-                    if lidar_detected:
-                        rospy.loginfo("SỰ KIỆN: LiDAR phát hiện giao lộ.")
-                    if line_lost:
-                        rospy.logwarn("SỰ KIỆN: Vạch kẻ đường biến mất (ngã ba/ngã tư).")
+                if rospy.get_time() - self.state_change_time > self.INTERSECTION_APPROACH_DURATION:
+                    rospy.loginfo("Đã tiến vào trung tâm giao lộ. Dừng lại để xử lý.")
+                    self.robot.stop(); time.sleep(0.5)
 
                     self.current_node_id = self.target_node_id
                     rospy.loginfo(f"==> ĐÃ ĐẾN node {self.current_node_id}.")
 
-                    # Kiểm tra xem đã đến đích chưa
                     if self.current_node_id == self.navigator.end_node:
-                        rospy.loginfo("ĐÃ ĐẾN ĐÍCH!")
+                        rospy.loginfo("ĐÃ ĐẾN ĐÍCH CUỐI CÙNG!")
                         self._set_state(RobotState.GOAL_REACHED)
-                        continue
-                    
-                    self._set_state(RobotState.HANDLING_EVENT)
-                    self.handle_intersection() 
-                    continue
+                    else:
+                        self._set_state(RobotState.HANDLING_EVENT)
+                        self.handle_intersection()
 
-                if line_center_x is not None:
-                    self.correct_course(line_center_x)
-
+            # ===================================================================
+            # TRẠNG THÁI 3: ĐANG RỜI KHỎI GIAO LỘ (LEAVING_INTERSECTION)
+            # ===================================================================
             elif self.current_state == RobotState.LEAVING_INTERSECTION:
                 self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
                 if rospy.get_time() - self.state_change_time > self.INTERSECTION_CLEARANCE_DURATION:
-                    rospy.loginfo("Đã thoát khỏi khu vực sự kiện, quay lại đi thẳng.")
+                    rospy.loginfo("Đã thoát khỏi khu vực giao lộ. Bắt đầu tìm kiếm line mới.")
+                    self._set_state(RobotState.REACQUIRING_LINE)
+            
+            # ===================================================================
+            # TRẠNG THÁI 4: ĐANG TÌM LẠI LINE (REACQUIRING_LINE)
+            # ===================================================================
+            elif self.current_state == RobotState.REACQUIRING_LINE:
+                self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
+                line_center_x = self._get_line_center(self.latest_image, self.ROI_Y, self.ROI_H)
+                
+                if line_center_x is not None:
+                    rospy.loginfo("Đã tìm thấy line mới! Chuyển sang chế độ bám line.")
                     self._set_state(RobotState.DRIVING_STRAIGHT)
+                    continue
+                
+                if rospy.get_time() - self.state_change_time > self.LINE_REACQUIRE_TIMEOUT:
+                    rospy.logerr("Không thể tìm thấy line mới sau khi rời giao lộ. Dừng lại.")
+                    self._set_state(RobotState.DEAD_END)
+
+            # ===================================================================
+            # TRẠNG THÁI KẾT THÚC (DEAD_END, GOAL_REACHED)
+            # ===================================================================
             elif self.current_state == RobotState.DEAD_END:
-                rospy.logwarn("Đã đến ngõ cụt. Dừng hoạt động vĩnh viễn."); self.robot.stop(); break
+                rospy.logwarn("Đã vào ngõ cụt hoặc gặp lỗi không thể phục hồi. Dừng hoạt động."); self.robot.stop(); break
             elif self.current_state == RobotState.GOAL_REACHED: 
-                rospy.loginfo("ĐÃ ĐẾN ĐÍCH. Dừng hoạt động."); self.robot.stop(); break
+                rospy.loginfo("ĐÃ HOÀN THÀNH NHIỆM VỤ. Dừng hoạt động."); self.robot.stop(); break
+            
             rate.sleep()
         self.cleanup()
 
@@ -357,26 +421,50 @@ class JetBotController:
                 return label
         return None
     
-    def _get_line_center(self, image):
-        roi = image[self.ROI_Y : self.ROI_Y + self.ROI_H, :]
+    def _get_line_center(self, image, roi_y, roi_h):
+        """Kiểm tra sự tồn tại và vị trí của vạch kẻ trong một ROI cụ thể."""
+        if image is None: return None
+        roi = image[roi_y : roi_y + roi_h, :]
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, self.LINE_COLOR_LOWER, self.LINE_COLOR_UPPER)
-        _img, contours, _hierarchy = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if contours:
-            c = max(contours, key=cv2.contourArea)
-            M = cv2.moments(c)
-            if M["m00"] > 0:
-                return int(M["m10"] / M["m00"])
+        
+        _, contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # ================================
+
+        if not contours:
+            return None # Không có vạch kẻ trong ROI này
+            
+        c = max(contours, key=cv2.contourArea)
+        
+        if cv2.contourArea(c) < self.SCAN_PIXEL_THRESHOLD:
+            return None # Contour quá nhỏ, coi như không có line
+
+        M = cv2.moments(c)
+        if M["m00"] > 0:
+            return int(M["m10"] / M["m00"])
         return None
 
     def correct_course(self, line_center_x):
+        """
+        Hàm bám line an toàn với cơ chế giới hạn lực bẻ lái.
+        """
         error = line_center_x - (self.WIDTH / 2)
-        safe_zone_pixels = (self.WIDTH / 2) * self.SAFE_ZONE_PERCENT
-        if abs(error) < safe_zone_pixels:
+        
+        # Vẫn đi thẳng nếu sai số rất nhỏ
+        if abs(error) < (self.WIDTH / 2) * self.SAFE_ZONE_PERCENT:
             self.robot.set_motors(self.BASE_SPEED, self.BASE_SPEED)
-        else:
-            adj = error / (self.WIDTH / 2) * self.CORRECTION_GAIN
-            self.robot.set_motors(self.BASE_SPEED + adj, self.BASE_SPEED - adj)
+            return
+
+        # Tính toán lực điều chỉnh
+        adj = (error / (self.WIDTH / 2)) * self.CORRECTION_GAIN
+
+        # Ngăn chặn hành vi bẻ lái quá gắt một cách tuyệt đối
+        adj = np.clip(adj, -self.MAX_CORRECTION_ADJ, self.MAX_CORRECTION_ADJ)
+        
+        # Áp dụng lực điều chỉnh đã được giới hạn
+        left_motor = self.BASE_SPEED + adj
+        right_motor = self.BASE_SPEED - adj
+        self.robot.set_motors(left_motor, right_motor)
         
     def handle_intersection(self):
         rospy.loginfo("\n[GIAO LỘ] Dừng lại và xử lý...")
