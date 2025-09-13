@@ -77,14 +77,14 @@ class JetBotController:
         self.TURN_DURATION_90_DEG = 0.8
         self.ROI_Y = int(self.HEIGHT * 0.85)
         self.ROI_H = int(self.HEIGHT * 0.15)
-
+        self.ROI_CENTER_WIDTH_PERCENT = 0.5
         self.LOOKAHEAD_ROI_Y = int(self.HEIGHT * 0.60) # Vị trí Y cao hơn
         self.LOOKAHEAD_ROI_H = int(self.HEIGHT * 0.15) # Chiều cao tương tự
 
         self.CORRECTION_GAIN = 0.5
-        self.SAFE_ZONE_PERCENT = 0.4
-        self.LINE_COLOR_LOWER = np.array([95, 80, 50])
-        self.LINE_COLOR_UPPER = np.array([125, 255, 255])
+        self.SAFE_ZONE_PERCENT = 0.3
+        self.LINE_COLOR_LOWER = np.array([0, 0, 0])
+        self.LINE_COLOR_UPPER = np.array([180, 255, 75])
         self.INTERSECTION_CLEARANCE_DURATION = 1.5
         self.INTERSECTION_APPROACH_DURATION = 0.5
         self.LINE_REACQUIRE_TIMEOUT = 3.0
@@ -425,25 +425,52 @@ class JetBotController:
         """Kiểm tra sự tồn tại và vị trí của vạch kẻ trong một ROI cụ thể."""
         if image is None: return None
         roi = image[roi_y : roi_y + roi_h, :]
-        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, self.LINE_COLOR_LOWER, self.LINE_COLOR_UPPER)
         
-        _, contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        # ================================
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        
+        # Bước 1: Tạo mặt nạ màu sắc như cũ
+        color_mask = cv2.inRange(hsv, self.LINE_COLOR_LOWER, self.LINE_COLOR_UPPER)
+        
+        # (Không cần thiết phải làm mờ hay erode/dilate nữa, vì masking sẽ hiệu quả hơn)
+        
+        # === BƯỚC 2: TẠO MẶT NẠ TẬP TRUNG (FOCUS MASK) ===
+        focus_mask = np.zeros_like(color_mask)
+        roi_height, roi_width = focus_mask.shape
+        
+        center_width = int(roi_width * self.ROI_CENTER_WIDTH_PERCENT)
+        start_x = (roi_width - center_width) // 2
+        end_x = start_x + center_width
+        
+        # Vẽ một hình chữ nhật trắng ở giữa
+        cv2.rectangle(focus_mask, (start_x, 0), (end_x, roi_height), 255, -1)
+        
+        # === BƯỚC 3: KẾT HỢP HAI MẶT NẠ ===
+        # Chỉ giữ lại những pixel trắng nào xuất hiện ở cả hai mặt nạ
+        final_mask = cv2.bitwise_and(color_mask, focus_mask)
+
+        # (Tùy chọn) Hiển thị mask để debug
+        # cv2.imshow("Color Mask", color_mask)
+        # cv2.imshow("Focus Mask", focus_mask)
+        # cv2.imshow("Final Mask", final_mask)
+        # cv2.waitKey(1)
+        
+        # Tìm contours trên mặt nạ cuối cùng đã được lọc
+        _, contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         if not contours:
-            return None # Không có vạch kẻ trong ROI này
+            return None
             
         c = max(contours, key=cv2.contourArea)
         
         if cv2.contourArea(c) < self.SCAN_PIXEL_THRESHOLD:
-            return None # Contour quá nhỏ, coi như không có line
+            return None
 
         M = cv2.moments(c)
         if M["m00"] > 0:
+            # Quan trọng: Trọng tâm bây giờ được tính toán chỉ dựa trên vạch kẻ trong khu vực trung tâm
             return int(M["m10"] / M["m00"])
         return None
-
+    
     def correct_course(self, line_center_x):
         """
         Hàm bám line an toàn với cơ chế giới hạn lực bẻ lái.
