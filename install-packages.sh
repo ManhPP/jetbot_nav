@@ -6,7 +6,7 @@ apt-get install -y python3-opencv
 usermod -aG dialout jetbot
 usermod -aG video jetbot
 
-pip3 install rospkg pyzbar paho-mqtt --break-system-packages
+pip3 install rospkg pyzbar paho-mqtt
 
 cat <<EOF > /home/jetbot/catkin_ws/src/jetbot_pro/launch/lidar.launch
 <?xml version="1.0"?>
