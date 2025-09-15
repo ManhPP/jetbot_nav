@@ -92,9 +92,9 @@ class JetBotController:
         self.YOLO_MODEL_PATH = "models/best.onnx"
         self.YOLO_CONF_THRESHOLD = 0.6
         self.YOLO_INPUT_SIZE = (640, 640)
-        self.YOLO_CLASS_NAMES = ['F', 'L', 'NF', 'NL', 'NR', 'R', 'math']
-        self.PRESCRIPTIVE_SIGNS = {'L', 'R', 'F'}
-        self.PROHIBITIVE_SIGNS = {'NL', 'NR', 'NF'}
+        self.YOLO_CLASS_NAMES = ['N', 'E', 'W', 'S', 'NN', 'NE', 'NW', 'NS', 'math']
+        self.PRESCRIPTIVE_SIGNS = {'N', 'E', 'W', 'S'}
+        self.PROHIBITIVE_SIGNS = {'NN', 'NE', 'NW', 'NS'}
         self.DATA_ITEMS = {'qr_code', 'math_problem'}
         self.MQTT_BROKER = "localhost"; self.MQTT_PORT = 1883
         self.MQTT_DATA_TOPIC = "jetbot/corrected_event_data"
