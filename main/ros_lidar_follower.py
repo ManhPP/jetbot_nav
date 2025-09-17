@@ -431,8 +431,6 @@ class JetBotController:
         # Bước 1: Tạo mặt nạ màu sắc như cũ
         color_mask = cv2.inRange(hsv, self.LINE_COLOR_LOWER, self.LINE_COLOR_UPPER)
         
-        # (Không cần thiết phải làm mờ hay erode/dilate nữa, vì masking sẽ hiệu quả hơn)
-        
         # === BƯỚC 2: TẠO MẶT NẠ TẬP TRUNG (FOCUS MASK) ===
         focus_mask = np.zeros_like(color_mask)
         roi_height, roi_width = focus_mask.shape
