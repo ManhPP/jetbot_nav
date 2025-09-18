@@ -153,6 +153,10 @@ class JetBotController:
         self.MAX_CORRECTION_ADJ = 0.12
         self.MAP_FILE_PATH = "map.json"
         self.LABEL_TO_DIRECTION_ENUM = {'N': Direction.NORTH, 'E': Direction.EAST, 'S': Direction.SOUTH, 'W': Direction.WEST}
+        self.VIDEO_OUTPUT_FILENAME = 'jetbot_run.avi'
+        self.VIDEO_FPS = 20  # Nên khớp với rospy.Rate của bạn
+        # Codec 'MJPG' rất phổ biến và tương thích tốt
+        self.VIDEO_FOURCC = cv2.VideoWriter_fourcc(*'MJPG')
 
     def initialize_hardware(self):
         try:
