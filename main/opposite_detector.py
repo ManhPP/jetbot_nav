@@ -95,8 +95,7 @@ class SimpleOppositeDetector:
         return abs(self.get_angle_difference(angle1, angle2) - 180.0) <= self.opposite_tolerance
     
     def find_all_objects(self, scan):
-        # ... (Hàm này và các hàm con không đổi) ...
-        # (Giữ nguyên phần logic phát hiện vật thể)
+        # (logic phát hiện vật thể)
         ranges = np.array(scan.ranges)
         n = len(ranges)
         angle_increment_deg = math.degrees(scan.angle_increment)
@@ -116,7 +115,6 @@ class SimpleOppositeDetector:
         return objects
 
     def find_opposite_pairs(self, objects):
-        # ... (Không đổi) ...
         opposite_pairs = []
         for i, obj1 in enumerate(objects):
             for j, obj2 in enumerate(objects[i+1:], i+1):
