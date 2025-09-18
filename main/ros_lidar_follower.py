@@ -8,6 +8,7 @@ import os
 import json
 import math
 from enum import Enum
+import requests
 
 from jetbot import Robot
 import onnxruntime as ort
@@ -574,6 +575,11 @@ class JetBotController:
                 # if decoded: qr_data = decoded[0].data.decode('utf-8'); self.publish_data(...)
                 rospy.loginfo("Found QR Code. Publishing data...")
                 self.publish_data({'type': 'QR_CODE', 'value': 'simulated_data_123'})
+
+                # response = requests.post(url, json=data)
+
+                # print(response.status_code)
+
             elif item['class_name'] == 'math_problem':
                 rospy.loginfo("Found Math Problem. Solving and publishing...")
                 self.publish_data({'type': 'MATH_PROBLEM', 'value': '2+2=4'})

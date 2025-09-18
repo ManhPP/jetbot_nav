@@ -7,7 +7,7 @@ Original file is located at
     https://colab.research.google.com/drive/1VnyhIDQe94qSSnx65XtEsnSad1wElgwe
 """
 
-!pip install ultralytics
+# !pip install ultralytics
 
 from ultralytics import YOLO
 

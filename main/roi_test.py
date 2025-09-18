@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 # ==============================================================================
-# PHẦN 1: COPY-PASTE CÁC THAM SỐ TỪ CODE CHÍNH CỦA BẠN
+# PHẦN 1: COPY-PASTE CÁC THAM SỐ TỪ CODE CHÍNH
 # Hãy đảm bảo các giá trị này giống hệt như trong file controller.
 # ==============================================================================
 
@@ -112,7 +112,7 @@ def visualize_get_line_center(image, roi_y, roi_h, window_name_prefix=""):
 # ==============================================================================
 
 if __name__ == '__main__':
-    # THAY TÊN FILE ẢNH CỦA BẠN VÀO ĐÂY
+    # THAY TÊN FILE ẢNH VÀO ĐÂY
     image_path = "test.jpg"
     
     try:
