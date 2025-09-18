@@ -38,6 +38,9 @@ class JetBotController:
         self.initialize_yolo()
         self.initialize_mqtt()
 
+        self.video_writer = None
+        self.initialize_video_writer()
+
         self.navigator = MapNavigator(self.MAP_FILE_PATH)
         self.current_node_id = self.navigator.start_node
         self.target_node_id = None
@@ -69,6 +72,51 @@ class JetBotController:
         else:
             rospy.logerr("Không tìm thấy đường đi hoặc đường đi quá ngắn!")
             self._set_state(RobotState.DEAD_END)
+
+    def initialize_video_writer(self):
+        """Khởi tạo đối tượng VideoWriter."""
+        try:
+            # Kích thước video sẽ giống kích thước ảnh robot xử lý
+            frame_size = (self.WIDTH, self.HEIGHT)
+            self.video_writer = cv2.VideoWriter(self.VIDEO_OUTPUT_FILENAME, 
+                                                self.VIDEO_FOURCC, 
+                                                self.VIDEO_FPS, 
+                                                frame_size)
+            if self.video_writer.isOpened():
+                rospy.loginfo(f"Bắt đầu ghi video vào file '{self.VIDEO_OUTPUT_FILENAME}'")
+            else:
+                rospy.logerr("Không thể mở file video để ghi.")
+                self.video_writer = None
+        except Exception as e:
+            rospy.logerr(f"Lỗi khi khởi tạo VideoWriter: {e}")
+            self.video_writer = None
+
+    def draw_debug_info(self, image):
+        """Vẽ các thông tin gỡ lỗi lên một khung hình."""
+        if image is None:
+            return None
+        
+        debug_frame = image.copy()
+        
+        # 1. Vẽ các ROI
+        # ROI Chính (màu xanh lá)
+        cv2.rectangle(debug_frame, (0, self.ROI_Y), (self.WIDTH-1, self.ROI_Y + self.ROI_H), (0, 255, 0), 1)
+        # ROI Dự báo (màu vàng)
+        cv2.rectangle(debug_frame, (0, self.LOOKAHEAD_ROI_Y), (self.WIDTH-1, self.LOOKAHEAD_ROI_Y + self.LOOKAHEAD_ROI_H), (0, 255, 255), 1)
+
+        # 2. Vẽ trạng thái hiện tại
+        state_text = f"State: {self.current_state.name}"
+        cv2.putText(debug_frame, state_text, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+        
+        # 3. Vẽ line và trọng tâm (nếu robot đang bám line)
+        if self.current_state == RobotState.DRIVING_STRAIGHT:
+            # Lấy line center của ROI Chính
+            line_center = self._get_line_center(image, self.ROI_Y, self.ROI_H)
+            if line_center is not None:
+                # Vẽ một đường thẳng đứng màu đỏ tại vị trí trọng tâm
+                cv2.line(debug_frame, (line_center, self.ROI_Y), (line_center, self.ROI_Y + self.ROI_H), (0, 0, 255), 2)
+
+        return debug_frame
 
     def setup_parameters(self):
         self.WIDTH, self.HEIGHT = 300, 300
@@ -371,7 +419,13 @@ class JetBotController:
                 rospy.logwarn("Đã vào ngõ cụt hoặc gặp lỗi không thể phục hồi. Dừng hoạt động."); self.robot.stop(); break
             elif self.current_state == RobotState.GOAL_REACHED: 
                 rospy.loginfo("ĐÃ HOÀN THÀNH NHIỆM VỤ. Dừng hoạt động."); self.robot.stop(); break
-            
+
+            if self.video_writer is not None and self.latest_image is not None:
+                # Lấy ảnh gốc, vẽ thông tin lên, rồi ghi
+                debug_frame = self.draw_debug_info(self.latest_image)
+                if debug_frame is not None:
+                    self.video_writer.write(debug_frame)
+
             rate.sleep()
         self.cleanup()
 
