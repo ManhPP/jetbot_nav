@@ -149,7 +149,6 @@ class SimpleOppositeDetector:
             return False
 
     def detect_object_in_zone(self, zone_ranges, zone_name):
-        # ... (Không đổi) ...
         if len(zone_ranges) == 0: return None
         valid_mask = (zone_ranges >= self.min_distance) & (zone_ranges <= self.max_distance) & np.isfinite(zone_ranges)
         if np.sum(valid_mask) < self.object_min_points: return None
