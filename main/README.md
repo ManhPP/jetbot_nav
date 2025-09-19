@@ -9,8 +9,8 @@ Hệ thống được thiết kế để đáp ứng một tập hợp các yêu
 2.  **Bám vạch Kẻ đường:** Robot phải tự động di chuyển theo một vạch kẻ màu đen trên nền trắng, tự động căn chỉnh để đi vào giữa vạch.
 3.  **Phát hiện Giao lộ:** Robot phải nhận biết được khi nó đến một giao lộ (ngã ba, ngã tư) bằng cách sử dụng kết hợp cảm biến LiDAR và phân tích hình ảnh camera.
 4.  **Nhận diện và Diễn giải Biển báo:** Sử dụng một mô hình Trí tuệ Nhân tạo (YOLOv8-ONNX), robot phải phát hiện và phân loại chính xác các biển báo giao thông, bao gồm:
-    *   **Biển báo Bắt buộc:** Rẽ Trái (L), Rẽ Phải (R), Đi Thẳng (F).
-    *   **Biển báo Cấm:** Cấm Rẽ Trái (NL), Cấm Rẽ Phải (NR), Cấm Đi Thẳng (NF).
+    *   **Biển báo Bắt buộc:**
+    *   **Biển báo Cấm:**
 5.  **Ra quyết định Phức hợp:** Tại mỗi giao lộ, robot phải ra quyết định hướng đi dựa trên một hệ thống ưu tiên nghiêm ngặt, kết hợp giữa lộ trình đã định, biển báo và các quy tắc giao thông.
 6.  **Thích ứng và Lập lại Kế hoạch:** Robot phải có khả năng tự động tìm một con đường mới nếu lộ trình ban đầu bị chặn bởi biển báo cấm, hoặc nếu nó buộc phải đi chệch hướng do một biển báo bắt buộc.
 7.  **Thu thập Dữ liệu:** Robot phải có khả năng nhận diện các đối tượng dữ liệu như mã QR hoặc bài toán và gửi thông tin thu thập được qua giao thức MQTT.
