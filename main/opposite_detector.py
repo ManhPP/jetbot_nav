@@ -13,11 +13,11 @@ import math
 class SimpleOppositeDetector:
     def __init__(self):
         # Các tham số cố định
-        self.min_distance = 0.15
-        self.max_distance = 0.3
-        self.object_min_points = 10
-        self.distance_threshold = 0.1
-        self.angle_range = 10.0
+        self.min_distance = 0.25
+        self.max_distance = 0.35
+        self.object_min_points = 15
+        self.distance_threshold = 0.10
+        self.angle_range = 20.0
         self.detection_interval = 2.0
         self.opposite_tolerance = 5.0
         self.min_opposite_distance = 45.0
